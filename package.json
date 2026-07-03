@@ -1,0 +1,13 @@
+{
+  "name": "ffm-calendar-tool",
+  "version": "1.0.0",
+  "description": "Full Frame Media smart calendar blocker",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "node-fetch": "^2.6.9",
+    "ical": "^0.8.0",
+    "googleapis": "^140.0.0"
+  }
+}

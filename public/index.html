@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FFM Calendar Shield</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0d0d0d; color: #ffffff; font-family: 'Outfit', Arial, sans-serif; min-height: 100vh; }
+  @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap');
+
+  .header {
+    background: #111111;
+    border-bottom: 1px solid #1e1e1e;
+    padding: 20px 32px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .header-left h1 {
+    font-size: 20px;
+    font-weight: 600;
+    color: #ffffff;
+  }
+
+  .header-left p {
+    font-size: 12px;
+    color: #666;
+    margin-top: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .header-right {
+    display: flex;
+    gap: 10px;
+  }
+
+  .btn {
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border: none;
+    transition: all 0.15s;
+  }
+
+  .btn-primary { background: #617DA1; color: #fff; }
+  .btn-primary:hover { background: #4f6a8e; }
+  .btn-secondary { background: #1e1e1e; color: #aaa; border: 1px solid #2a2a2a; }
+  .btn-secondary:hover { background: #252525; color: #fff; }
+  .btn-sm { padding: 7px 14px; font-size: 12px; }
+  .btn-yes { background: #2d6a4f; color: #fff; }
+  .btn-yes:hover { background: #236040; }
+  .btn-no { background: #6a2d2d; color: #fff; }
+  .btn-no:hover { background: #5a2222; }
+
+  .container { max-width: 960px; margin: 0 auto; padding: 32px; }
+
+  .stats-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    margin-bottom: 32px;
+  }
+
+  .stat-card {
+    background: #111;
+    border: 1px solid #1e1e1e;
+    border-radius: 12px;
+    padding: 20px;
+  }
+
+  .stat-card .label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #555;
+    margin-bottom: 8px;
+  }
+
+  .stat-card .value {
+    font-size: 32px;
+    font-weight: 700;
+    color: #617DA1;
+  }
+
+  .section-title {
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #555;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid #1e1e1e;
+  }
+
+  .event-card {
+    background: #111;
+    border: 1px solid #1e1e1e;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 12px;
+    transition: border-color 0.15s;
+  }
+
+  .event-card:hover { border-color: #2a2a2a; }
+
+  .event-card.likely-block { border-left: 3px solid #617DA1; }
+  .event-card.likely-skip { border-left: 3px solid #4a4a4a; }
+  .event-card.unknown { border-left: 3px solid #a06020; }
+
+  .event-top {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 12px;
+  }
+
+  .event-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: #ffffff;
+    margin-bottom: 4px;
+  }
+
+  .event-meta {
+    font-size: 12px;
+    color: #666;
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+
+  .event-meta span { display: flex; align-items: center; gap: 4px; }
+
+  .badge {
+    font-size: 10px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .badge-kainen { background: #1a3a5c; color: #617DA1; }
+  .badge-kiya { background: #3a1a4a; color: #a06090; }
+  .badge-baseball { background: #1a3a1a; color: #4a904a; }
+  .badge-hockey { background: #1a2a3a; color: #4a7a9a; }
+  .badge-football { background: #3a2a1a; color: #9a7a4a; }
+  .badge-softball { background: #3a1a2a; color: #9a4a6a; }
+
+  .event-reasoning {
+    font-size: 12px;
+    color: #888;
+    background: #0a0a0a;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin-bottom: 14px;
+    line-height: 1.5;
+  }
+
+  .event-timing {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 14px;
+    flex-wrap: wrap;
+  }
+
+  .timing-item {
+    font-size: 12px;
+    color: #888;
+  }
+
+  .timing-item strong { color: #ccc; }
+
+  .event-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: #444;
+  }
+
+  .empty-state h3 { font-size: 18px; margin-bottom: 8px; color: #666; }
+  .empty-state p { font-size: 14px; }
+
+  .learned-section { margin-top: 40px; }
+
+  .pattern-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 16px;
+    background: #111;
+    border: 1px solid #1e1e1e;
+    border-radius: 8px;
+    margin-bottom: 8px;
+    font-size: 13px;
+  }
+
+  .pattern-name { color: #ccc; }
+  .pattern-decision { color: #888; font-size: 12px; }
+  .confidence-bar {
+    display: flex;
+    gap: 3px;
+    align-items: center;
+  }
+  .conf-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #222;
+  }
+  .conf-dot.filled { background: #617DA1; }
+
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: #1e1e1e;
+    border: 1px solid #2a2a2a;
+    border-radius: 10px;
+    padding: 14px 20px;
+    font-size: 13px;
+    color: #ccc;
+    display: none;
+    z-index: 100;
+  }
+
+  .toast.show { display: block; }
+  .toast.success { border-left: 3px solid #2d6a4f; }
+  .toast.info { border-left: 3px solid #617DA1; }
+
+  .loading { color: #444; font-size: 14px; padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>📅 Calendar Shield</h1>
+    <p>Full Frame Media — Smart Calendar Blocker</p>
+  </div>
+  <div class="header-right">
+    <button class="btn btn-secondary" onclick="loadEvents()">↻ Refresh</button>
+    <button class="btn btn-primary" onclick="runScan()">Run Scan Now</button>
+  </div>
+</div>
+
+<div class="container">
+
+  <div class="stats-row">
+    <div class="stat-card">
+      <div class="label">Awaiting Review</div>
+      <div class="value" id="stat-pending">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Patterns Learned</div>
+      <div class="value" id="stat-learned">—</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">Events Processed</div>
+      <div class="value" id="stat-processed">—</div>
+    </div>
+  </div>
+
+  <div class="section-title">Events Needing Your Review</div>
+  <div id="events-list"><div class="loading">Loading events...</div></div>
+
+  <div class="learned-section">
+    <div class="section-title">What I've Learned</div>
+    <div id="learned-list"><div class="loading">Loading patterns...</div></div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const API = '';
+
+function formatDate(iso) {
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }) +
+    ' at ' + d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+function formatTime(iso) {
+  return new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+}
+
+function getCardClass(decision) {
+  if (decision === 'LIKELY_BLOCK') return 'likely-block';
+  if (decision === 'LIKELY_SKIP') return 'likely-skip';
+  return 'unknown';
+}
+
+function getBadgeClass(str) {
+  return 'badge-' + str.toLowerCase().split(' ')[0];
+}
+
+function showToast(msg, type = 'info') {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = `toast show ${type}`;
+  setTimeout(() => t.className = 'toast', 3000);
+}
+
+async function loadEvents() {
+  try {
+    const res = await fetch(`${API}/api/events`);
+    const data = await res.json();
+
+    document.getElementById('stat-pending').textContent = data.pending.length;
+    document.getElementById('stat-learned').textContent = Object.keys(data.learned).length;
+    document.getElementById('stat-processed').textContent = data.processedCount;
+
+    renderEvents(data.pending);
+    renderLearned(data.learned);
+  } catch (e) {
+    document.getElementById('events-list').innerHTML = '<div class="loading">Error loading events</div>';
+  }
+}
+
+function renderEvents(events) {
+  const el = document.getElementById('events-list');
+  if (!events.length) {
+    el.innerHTML = `<div class="empty-state"><h3>All caught up!</h3><p>No events waiting for review. Run a scan to check for new events.</p></div>`;
+    return;
+  }
+
+  // Sort by start date
+  events.sort((a, b) => new Date(a.start) - new Date(b.start));
+
+  el.innerHTML = events.map(e => `
+    <div class="event-card ${getCardClass(e.decision)}" id="card-${e.id.replace(/[^a-z0-9]/gi, '_')}">
+      <div class="event-top">
+        <div>
+          <div class="event-title">${e.title}</div>
+          <div class="event-meta">
+            <span>${formatDate(e.start)}</span>
+            ${e.location ? `<span>📍 ${e.location}</span>` : ''}
+          </div>
+        </div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end;">
+          <span class="badge ${getBadgeClass(e.kid)}">${e.kid}</span>
+          <span class="badge ${getBadgeClass(e.sport)}">${e.sport}</span>
+        </div>
+      </div>
+
+      <div class="event-reasoning">
+        💭 ${e.reason}
+      </div>
+
+      <div class="event-timing">
+        <div class="timing-item">
+          <strong>Event starts:</strong> ${formatTime(e.start)}
+        </div>
+        ${e.driveTime ? `<div class="timing-item"><strong>Drive time:</strong> ~${e.driveTime} min</div>` : ''}
+        <div class="timing-item">
+          <strong>Leave by:</strong> ${formatTime(e.leaveBy)}
+        </div>
+        <div class="timing-item">
+          <strong>Block starts:</strong> ${formatTime(e.leaveBy)} (${e.totalBuffer} min buffer)
+        </div>
+      </div>
+
+      <div class="event-actions">
+        <button class="btn btn-yes btn-sm" onclick="decide('${e.id}', true)">✓ Yes, I'm going — Block my calendar</button>
+        <button class="btn btn-no btn-sm" onclick="decide('${e.id}', false)">✗ No — Don't block</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderLearned(learned) {
+  const el = document.getElementById('learned-list');
+  const keys = Object.keys(learned);
+
+  if (!keys.length) {
+    el.innerHTML = `<div class="empty-state"><h3>Nothing learned yet</h3><p>Start reviewing events above and I'll learn your patterns.</p></div>`;
+    return;
+  }
+
+  el.innerHTML = keys.map(key => {
+    const p = learned[key];
+    const dots = Array(10).fill(0).map((_, i) =>
+      `<div class="conf-dot ${i < p.confidence ? 'filled' : ''}"></div>`
+    ).join('');
+
+    return `
+      <div class="pattern-row">
+        <div>
+          <div class="pattern-name">${p.kid} — ${p.sport} <em style="color:#555">${key.split('_')[1]}</em></div>
+          <div class="pattern-decision">${p.attend ? '✓ You attend these' : '✗ You skip these'}</div>
+        </div>
+        <div class="confidence-bar" title="Confidence: ${p.confidence}/10">
+          ${dots}
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+async function decide(eventId, attend) {
+  try {
+    const res = await fetch(`${API}/api/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ eventId, attend })
+    });
+    const data = await res.json();
+
+    if (data.success) {
+      showToast(data.message, 'success');
+      loadEvents();
+    }
+  } catch (e) {
+    showToast('Error saving decision', 'info');
+  }
+}
+
+async function runScan() {
+  showToast('Scanning calendars...', 'info');
+  try {
+    const res = await fetch(`${API}/api/scan`);
+    const data = await res.json();
+    showToast(data.message, 'success');
+    setTimeout(loadEvents, 1000);
+  } catch (e) {
+    showToast('Scan failed — check console', 'info');
+  }
+}
+
+loadEvents();
+</script>
+</body>
+</html>
