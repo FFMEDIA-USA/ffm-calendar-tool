@@ -37,7 +37,7 @@ const KV_URL = process.env.KV_REST_API_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN;
 
 // Keywords that strongly suggest parent attendance required
-const ATTEND_KEYWORDS = ['game', 'tournament', 'meet', 'match', 'playoff', 'championship', 'showcase', 'scrimmage', 'jamboree', 'competition', 'vs', 'versus', '@'];
+const ATTEND_KEYWORDS = ['game', 'tournament', 'tourney', 'meet', 'match', 'playoff', 'championship', 'showcase', 'scrimmage', 'jamboree', 'competition', 'vs', 'versus', '@'];
 // Keywords that suggest player-only events
 const SKIP_KEYWORDS = ['practice', 'workout', 'training', 'conditioning', 'tryout', 'open skate', 'team meeting', 'picture day'];
 
@@ -79,6 +79,22 @@ async function getProcessedEvents() {
   return await kvGet('processed_events') || [];
 }
 
+// Detect all-day / date-only events
+function isAllDayEvent(event) {
+  // node-ical / ical mark date-only values in a couple of ways
+  if (event.datetype === 'date') return true;
+  if (event.start && event.start.dateOnly) return true;
+  // Fallback: starts exactly at midnight and duration is 0 or a whole number of days
+  const start = new Date(event.start);
+  if (start.getUTCHours() === 0 && start.getUTCMinutes() === 0 && start.getUTCSeconds() === 0) {
+    if (!event.end) return true;
+    const durationMs = new Date(event.end) - start;
+    if (durationMs === 0) return true;
+    if (durationMs % (24 * 60 * 60 * 1000) === 0) return true;
+  }
+  return false;
+}
+
 // AI decision engine
 function makeDecision(event, calendar, learnedPatterns) {
   const title = (event.summary || '').toLowerCase();
@@ -106,11 +122,16 @@ function makeDecision(event, calendar, learnedPatterns) {
   ATTEND_KEYWORDS.forEach(kw => { if (fullText.includes(kw)) attendScore++; });
   SKIP_KEYWORDS.forEach(kw => { if (fullText.includes(kw)) skipScore++; });
 
-  // Duration analysis - games tend to be longer
-  const durationMs = event.end - event.start;
-  const durationHours = durationMs / (1000 * 60 * 60);
-  if (durationHours >= 2) attendScore++;
-  if (durationHours < 1.5) skipScore++;
+  // All-day events are usually tournaments/jamborees — lean toward attend
+  if (isAllDayEvent(event)) attendScore++;
+
+  // Duration analysis - games tend to be longer (skip for all-day events)
+  if (!isAllDayEvent(event) && event.end) {
+    const durationMs = new Date(event.end) - new Date(event.start);
+    const durationHours = durationMs / (1000 * 60 * 60);
+    if (durationHours >= 2) attendScore++;
+    if (durationHours < 1.5) skipScore++;
+  }
 
   // Day of week analysis - games more likely on weekends
   const dayOfWeek = new Date(event.start).getDay();
@@ -128,7 +149,7 @@ function makeDecision(event, calendar, learnedPatterns) {
     return {
       decision: 'LIKELY_BLOCK',
       confidence: attendScore,
-      reason: `Looks like an event you'd attend (${ATTEND_KEYWORDS.filter(kw => fullText.includes(kw)).join(', ')})`,
+      reason: `Looks like an event you'd attend (${ATTEND_KEYWORDS.filter(kw => fullText.includes(kw)).join(', ') || 'all-day event'})`,
       needsConfirmation: true
     };
   }
@@ -197,12 +218,18 @@ module.exports = async (req, res) => {
       if (!event.start) continue;
       const eventStart = new Date(event.start);
       if (isNaN(eventStart.getTime())) continue;
-      if (eventStart <= now) continue;
+
+      const allDay = isAllDayEvent(event);
+      const eventEnd = event.end ? new Date(event.end) : null;
+
+      // Skip past events — but keep multi-day events still in progress
+      const effectiveEnd = eventEnd && eventEnd > eventStart ? eventEnd : eventStart;
+      if (effectiveEnd <= now) continue;
       if (eventStart > cutoff) continue;
 
-      // Skip events under 15 minutes — likely reminders not real events
-      if (event.end) {
-        const durationMs = new Date(event.end) - eventStart;
+      // Skip events under 15 minutes — likely reminders, NOT all-day events
+      if (!allDay && eventEnd) {
+        const durationMs = eventEnd - eventStart;
         if (durationMs < 15 * 60 * 1000) continue;
       }
 
@@ -214,7 +241,7 @@ module.exports = async (req, res) => {
       const decision = makeDecision(event, calendar, learnedPatterns);
       const driveTime = event.location ? await getDriveTime(event.location) : null;
       const totalBuffer = (driveTime || 30) + PREP_BUFFER_MINUTES;
-      const leaveBy = new Date(eventStart.getTime() - totalBuffer * 60 * 1000);
+      const leaveBy = allDay ? null : new Date(eventStart.getTime() - totalBuffer * 60 * 1000);
 
       const eventData = {
         id: eventId,
@@ -224,10 +251,11 @@ module.exports = async (req, res) => {
         title: event.summary || 'Unknown Event',
         location: event.location || null,
         start: eventStart.toISOString(),
-        end: event.end ? new Date(event.end).toISOString() : null,
+        end: eventEnd ? eventEnd.toISOString() : null,
+        allDay,
         driveTime,
         totalBuffer,
-        leaveBy: leaveBy.toISOString(),
+        leaveBy: leaveBy ? leaveBy.toISOString() : null,
         decision: decision.decision,
         confidence: decision.confidence,
         reason: decision.reason,
