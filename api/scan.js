@@ -32,6 +32,10 @@ const CALENDARS = [
 const HOME_ADDRESS = '1403 E Hidden Ranch Loop, Palmer, AK 99645';
 const PREP_BUFFER_MINUTES = 30;
 const SCAN_DAYS_AHEAD = 14;
+// Alaska is UTC-8 in summer (AKDT). All-day blocks run 9 AM - 8 PM Alaska.
+const AK_UTC_OFFSET = 8;
+const ALLDAY_START_HOUR_AK = 9;   // 9:00 AM Alaska
+const ALLDAY_END_HOUR_AK = 20;    // 8:00 PM Alaska
 const MAPS_API_KEY = process.env.GOOGLE_MAPS_API_KEY;
 const KV_URL = process.env.KV_REST_API_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN;
@@ -242,11 +246,34 @@ module.exports = async (req, res) => {
 
     for (const event of events) {
       if (!event.start) continue;
-      const eventStart = new Date(event.start);
+      let eventStart = new Date(event.start);
       if (isNaN(eventStart.getTime())) continue;
 
       const allDay = isAllDayEvent(event);
-      const eventEnd = event.end ? new Date(event.end) : null;
+      let eventEnd = event.end ? new Date(event.end) : null;
+
+      // All-day events arrive as UTC midnight, which renders as 4 PM the
+      // previous day in Alaska. Pin them to 9 AM - 8 PM Alaska time instead.
+      // Note: an all-day DTEND is exclusive (the day AFTER the last day).
+      if (allDay) {
+        const y = eventStart.getUTCFullYear();
+        const m = eventStart.getUTCMonth();
+        const d = eventStart.getUTCDate();
+        eventStart = new Date(Date.UTC(y, m, d, ALLDAY_START_HOUR_AK + AK_UTC_OFFSET, 0, 0));
+
+        if (eventEnd && eventEnd > eventStart) {
+          const lastDay = new Date(eventEnd.getTime() - 24 * 60 * 60 * 1000);
+          eventEnd = new Date(Date.UTC(
+            lastDay.getUTCFullYear(),
+            lastDay.getUTCMonth(),
+            lastDay.getUTCDate(),
+            ALLDAY_END_HOUR_AK + AK_UTC_OFFSET, 0, 0
+          ));
+        } else {
+          // Single-day all-day event: block 9 AM - 8 PM same day
+          eventEnd = new Date(Date.UTC(y, m, d, ALLDAY_END_HOUR_AK + AK_UTC_OFFSET, 0, 0));
+        }
+      }
 
       // Skip past events — but keep multi-day events still in progress
       const effectiveEnd = eventEnd && eventEnd > eventStart ? eventEnd : eventStart;
