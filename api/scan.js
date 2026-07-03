@@ -183,7 +183,8 @@ async function fetchCalendar(calendar) {
 module.exports = async (req, res) => {
   // Allow manual trigger via GET, cron via any
   const now = new Date();
-  const cutoff = new Date(now.getTime() + SCAN_DAYS_AHEAD * 24 * 60 * 60 * 1000);
+  const alaskaNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Anchorage' }));
+  const cutoff = new Date(alaskaNow.getTime() + SCAN_DAYS_AHEAD * 24 * 60 * 60 * 1000);
 
   const learnedPatterns = await getLearnedPatterns();
   const processedEvents = await getProcessedEvents();
@@ -194,10 +195,19 @@ module.exports = async (req, res) => {
     const events = await fetchCalendar(calendar);
 
     for (const event of events) {
-      if (!event.start || event.start < now || event.start > cutoff) continue;
+      if (!event.start) continue;
+      const eventStart = new Date(event.start);
+      if (isNaN(eventStart.getTime())) continue;
+      if (eventStart <= alaskaNow) continue;
+      if (eventStart > cutoff) continue;
 
-      // Create unique event ID
-      const eventId = `${calendar.name}_${event.start.toISOString()}_${(event.summary || '').replace(/\s/g, '_')}`;
+      // Skip events under 15 minutes — likely reminders not real events
+      if (event.end) {
+        const durationMs = new Date(event.end) - eventStart;
+        if (durationMs < 15 * 60 * 1000) continue;
+      }
+
+      const eventId = `${calendar.name}_${eventStart.toISOString()}_${(event.summary || '').replace(/\s/g, '_')}`;
 
       // Skip already processed
       if (processedEvents.includes(eventId)) continue;
@@ -205,7 +215,7 @@ module.exports = async (req, res) => {
       const decision = makeDecision(event, calendar, learnedPatterns);
       const driveTime = event.location ? await getDriveTime(event.location) : null;
       const totalBuffer = (driveTime || 30) + PREP_BUFFER_MINUTES;
-      const leaveBy = new Date(event.start.getTime() - totalBuffer * 60 * 1000);
+      const leaveBy = new Date(eventStart.getTime() - totalBuffer * 60 * 1000);
 
       const eventData = {
         id: eventId,
@@ -214,8 +224,8 @@ module.exports = async (req, res) => {
         sport: calendar.sport,
         title: event.summary || 'Unknown Event',
         location: event.location || null,
-        start: event.start.toISOString(),
-        end: event.end ? event.end.toISOString() : null,
+        start: eventStart.toISOString(),
+        end: event.end ? new Date(event.end).toISOString() : null,
         driveTime,
         totalBuffer,
         leaveBy: leaveBy.toISOString(),
@@ -223,7 +233,7 @@ module.exports = async (req, res) => {
         confidence: decision.confidence,
         reason: decision.reason,
         needsConfirmation: decision.needsConfirmation,
-        scannedAt: now.toISOString()
+        scannedAt: alaskaNow.toISOString()
       };
 
       if (!decision.needsConfirmation && decision.decision === 'BLOCK') {
@@ -237,11 +247,12 @@ module.exports = async (req, res) => {
     }
   }
 
-  // Save pending events and processed list
+  // Save pending events — cap at 50 most recent to avoid KV size issues
   const existingPending = await getPendingEvents();
   const existingIds = existingPending.map(e => e.id);
   const merged = [...existingPending, ...newPendingEvents.filter(e => !existingIds.includes(e.id))];
-  await kvSet('pending_events', merged);
+  const capped = merged.slice(0, 50);
+  await kvSet('pending_events', capped);
   await kvSet('processed_events', processedEvents);
 
   return res.status(200).json({
