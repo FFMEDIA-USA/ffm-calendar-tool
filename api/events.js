@@ -3,6 +3,16 @@ const fetch = require('node-fetch');
 const KV_URL = process.env.KV_REST_API_URL;
 const KV_TOKEN = process.env.KV_REST_API_TOKEN;
 
+// Must match the keyword lists in scan.js so learned patterns line up
+const ATTEND_KEYWORDS = ['game', 'tournament', 'meet', 'match', 'playoff', 'championship', 'showcase', 'scrimmage', 'jamboree', 'competition', 'vs', 'versus', '@'];
+const SKIP_KEYWORDS = ['practice', 'workout', 'training', 'conditioning', 'tryout', 'open skate', 'team meeting', 'picture day'];
+
+function getEventType(title) {
+  for (const kw of SKIP_KEYWORDS) { if (title.includes(kw)) return kw; }
+  for (const kw of ATTEND_KEYWORDS) { if (title.includes(kw)) return kw; }
+  return 'event';
+}
+
 async function kvGet(key) {
   try {
     const res = await fetch(`${KV_URL}/get/${encodeURIComponent(key)}`, {
@@ -20,7 +30,7 @@ async function kvSet(key, value) {
     await fetch(`${KV_URL}/set/${encodeURIComponent(key)}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${KV_TOKEN}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify(JSON.stringify(value))
+      body: JSON.stringify(value)
     });
   } catch (e) {
     console.error('KV set error:', e);
@@ -43,7 +53,6 @@ module.exports = async (req, res) => {
 
   if (req.method === 'POST') {
     const { eventId, decision, attend } = req.body;
-
     const pending = await kvGet('pending_events') || [];
     const learned = await kvGet('learned_patterns') || {};
     const processed = await kvGet('processed_events') || [];
@@ -51,8 +60,8 @@ module.exports = async (req, res) => {
     const event = pending.find(e => e.id === eventId);
     if (!event) return res.status(404).json({ error: 'Event not found' });
 
-    // Update learned patterns
-    const patternKey = `${event.sport}_${event.title.toLowerCase().split(' ')[0]}`;
+    // Update learned patterns — key format matches scan.js: sport_eventtype
+    const patternKey = `${event.sport}_${getEventType(event.title.toLowerCase())}`;
     if (!learned[patternKey]) {
       learned[patternKey] = { attend, confidence: 1, sport: event.sport, kid: event.kid };
     } else {
