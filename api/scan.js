@@ -86,4 +86,235 @@ function isAllDayEvent(event) {
   const start = new Date(event.start);
   if (start.getUTCHours() === 0 && start.getUTCMinutes() === 0 && start.getUTCSeconds() === 0) {
     if (!event.end) return true;
-    const durationMs = new Date(event.end) -
+    const durationMs = new Date(event.end) - start;
+    if (durationMs === 0) return true;
+    if (durationMs % (24 * 60 * 60 * 1000) === 0) return true;
+  }
+  return false;
+}
+
+// AI decision engine
+function makeDecision(event, calendar, learnedPatterns) {
+  const title = (event.summary || '').toLowerCase();
+  const description = (event.description || '').toLowerCase();
+  const fullText = `${title} ${description}`;
+
+  const patternKey = `${calendar.sport}_${getEventType(title)}`;
+  if (learnedPatterns[patternKey]) {
+    const pattern = learnedPatterns[patternKey];
+    if (pattern.confidence >= 3) {
+      return {
+        decision: pattern.attend ? 'BLOCK' : 'SKIP',
+        confidence: pattern.confidence,
+        reason: `Learned: ${pattern.attend ? 'You attend' : 'You skip'} ${calendar.sport} ${getEventType(title)}s (confirmed ${pattern.confidence} times)`,
+        needsConfirmation: false
+      };
+    }
+  }
+
+  let attendScore = 0;
+  let skipScore = 0;
+
+  ATTEND_KEYWORDS.forEach(kw => { if (fullText.includes(kw)) attendScore++; });
+  SKIP_KEYWORDS.forEach(kw => { if (fullText.includes(kw)) skipScore++; });
+
+  // All-day events are usually tournaments/jamborees — lean toward attend
+  if (isAllDayEvent(event)) attendScore++;
+
+  // Duration analysis - games tend to be longer (skip for all-day events)
+  if (!isAllDayEvent(event) && event.end) {
+    const durationMs = new Date(event.end) - new Date(event.start);
+    const durationHours = durationMs / (1000 * 60 * 60);
+    if (durationHours >= 2) attendScore++;
+    if (durationHours < 1.5) skipScore++;
+  }
+
+  const dayOfWeek = new Date(event.start).getDay();
+  if (dayOfWeek === 0 || dayOfWeek === 6) attendScore++;
+  if (dayOfWeek >= 1 && dayOfWeek <= 5 && skipScore > 0) skipScore++;
+
+  if (skipScore > attendScore) {
+    return {
+      decision: 'LIKELY_SKIP',
+      confidence: skipScore,
+      reason: `Looks like a practice/player-only event (${SKIP_KEYWORDS.filter(kw => fullText.includes(kw)).join(', ')})`,
+      needsConfirmation: true
+    };
+  } else if (attendScore > 0) {
+    return {
+      decision: 'LIKELY_BLOCK',
+      confidence: attendScore,
+      reason: `Looks like an event you'd attend (${ATTEND_KEYWORDS.filter(kw => fullText.includes(kw)).join(', ') || 'all-day event'})`,
+      needsConfirmation: true
+    };
+  }
+
+  return {
+    decision: 'UNKNOWN',
+    confidence: 0,
+    reason: 'Not sure — needs your input',
+    needsConfirmation: true
+  };
+}
+
+function getEventType(title) {
+  for (const kw of SKIP_KEYWORDS) { if (title.includes(kw)) return kw; }
+  for (const kw of ATTEND_KEYWORDS) { if (title.includes(kw)) return kw; }
+  return 'event';
+}
+
+// Calculate drive time using Google Maps
+async function getDriveTime(destination) {
+  if (!destination) return null;
+  try {
+    const origin = encodeURIComponent(HOME_ADDRESS);
+    const dest = encodeURIComponent(destination);
+    const url = `https://maps.googleapis.com/maps/api/distancematrix/json?origins=${origin}&destinations=${dest}&key=${MAPS_API_KEY}`;
+    const res = await fetch(url);
+    const data = await res.json();
+    if (data.rows?.[0]?.elements?.[0]?.status === 'OK') {
+      const seconds = data.rows[0].elements[0].duration.value;
+      return Math.ceil(seconds / 60); // minutes
+    }
+  } catch (e) {
+    console.error('Drive time error:', e);
+  }
+  return null;
+}
+
+// Fix malformed date-only DTSTART/DTEND lines (GameChanger writes
+// "DTSTART:20260709" without the required VALUE=DATE label, which
+// breaks the parser). Rewrites them to spec before parsing.
+function fixMalformedDates(icsText) {
+  return icsText.replace(/^(DTSTART|DTEND):(\d{8})(\r?\n)/gm, '$1;VALUE=DATE:$2$3');
+}
+
+// Fetch and parse iCal feed
+async function fetchCalendar(calendar) {
+  try {
+    const url = calendar.url.replace('webcal://', 'https://');
+    const res = await fetch(url, { timeout: 10000 });
+    let text = await res.text();
+    text = fixMalformedDates(text);
+    const parsed = ical.parseICS(text);
+    const events = Object.values(parsed).filter(e => e.type === 'VEVENT');
+
+    // Belt and suspenders: manually recover any event whose date the
+    // parser still failed on, by reading the raw text ourselves.
+    const rawBlocks = text.split('BEGIN:VEVENT').slice(1);
+    for (const event of events) {
+      const start = new Date(event.start);
+      if (!event.start || isNaN(start.getTime())) {
+        const uid = event.uid;
+        const block = rawBlocks.find(b => uid && b.includes(uid));
+        if (block) {
+          const ds = block.match(/DTSTART(?:;VALUE=DATE)?:(\d{4})(\d{2})(\d{2})/);
+          const de = block.match(/DTEND(?:;VALUE=DATE)?:(\d{4})(\d{2})(\d{2})/);
+          if (ds) {
+            event.start = new Date(Date.UTC(+ds[1], +ds[2] - 1, +ds[3]));
+            event._allDay = true;
+          }
+          if (de) {
+            event.end = new Date(Date.UTC(+de[1], +de[2] - 1, +de[3]));
+          }
+        }
+      }
+    }
+
+    return events;
+  } catch (e) {
+    console.error(`Error fetching ${calendar.name}:`, e.message);
+    return [];
+  }
+}
+
+module.exports = async (req, res) => {
+  const now = new Date();
+  const cutoff = new Date(now.getTime() + SCAN_DAYS_AHEAD * 24 * 60 * 60 * 1000);
+
+  const learnedPatterns = await getLearnedPatterns();
+  let processedEvents = await getProcessedEvents();
+  const newPendingEvents = [];
+  const autoBlocked = [];
+
+  for (const calendar of CALENDARS) {
+    const events = await fetchCalendar(calendar);
+
+    for (const event of events) {
+      if (!event.start) continue;
+      const eventStart = new Date(event.start);
+      if (isNaN(eventStart.getTime())) continue;
+
+      const allDay = isAllDayEvent(event);
+      const eventEnd = event.end ? new Date(event.end) : null;
+
+      // Skip past events — but keep multi-day events still in progress
+      const effectiveEnd = eventEnd && eventEnd > eventStart ? eventEnd : eventStart;
+      if (effectiveEnd <= now) continue;
+      if (eventStart > cutoff) continue;
+
+      // Skip events under 15 minutes — likely reminders, NOT all-day events
+      if (!allDay && eventEnd) {
+        const durationMs = eventEnd - eventStart;
+        if (durationMs < 15 * 60 * 1000) continue;
+      }
+
+      const eventId = `${calendar.name}_${eventStart.toISOString()}_${(event.summary || '').replace(/\s/g, '_')}`;
+
+      if (processedEvents.includes(eventId)) continue;
+
+      const decision = makeDecision(event, calendar, learnedPatterns);
+      const driveTime = event.location ? await getDriveTime(event.location) : null;
+      const totalBuffer = (driveTime || 30) + PREP_BUFFER_MINUTES;
+      const leaveBy = allDay ? null : new Date(eventStart.getTime() - totalBuffer * 60 * 1000);
+
+      const eventData = {
+        id: eventId,
+        calendar: calendar.name,
+        kid: calendar.kid,
+        sport: calendar.sport,
+        title: event.summary || 'Unknown Event',
+        location: event.location || null,
+        start: eventStart.toISOString(),
+        end: eventEnd ? eventEnd.toISOString() : null,
+        allDay,
+        driveTime,
+        totalBuffer,
+        leaveBy: leaveBy ? leaveBy.toISOString() : null,
+        decision: decision.decision,
+        confidence: decision.confidence,
+        reason: decision.reason,
+        needsConfirmation: decision.needsConfirmation,
+        scannedAt: now.toISOString()
+      };
+
+      if (!decision.needsConfirmation && decision.decision === 'BLOCK') {
+        autoBlocked.push(eventData);
+        processedEvents.push(eventId);
+      } else if (!decision.needsConfirmation && decision.decision === 'SKIP') {
+        processedEvents.push(eventId);
+      } else {
+        newPendingEvents.push(eventData);
+      }
+    }
+  }
+
+  // Save pending events — cap at 50, keeping the NEWEST entries
+  const existingPending = await getPendingEvents();
+  const existingIds = existingPending.map(e => e.id);
+  const merged = [...existingPending, ...newPendingEvents.filter(e => !existingIds.includes(e.id))];
+  const capped = merged.slice(-50);
+  await kvSet('pending_events', capped);
+
+  // Prevent processed_events from growing forever — keep last 500
+  processedEvents = processedEvents.slice(-500);
+  await kvSet('processed_events', processedEvents);
+
+  return res.status(200).json({
+    success: true,
+    scanned: now.toISOString(),
+    newPending: newPendingEvents.length,
+    autoBlocked: autoBlocked.length,
+    message: `Found ${newPendingEvents.length} events needing your review, ${autoBlocked.length} auto-blocked`
+  });
+};
