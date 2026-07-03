@@ -183,11 +183,10 @@ async function fetchCalendar(calendar) {
 module.exports = async (req, res) => {
   // Allow manual trigger via GET, cron via any
   const now = new Date();
-  const alaskaNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/Anchorage' }));
-  const cutoff = new Date(alaskaNow.getTime() + SCAN_DAYS_AHEAD * 24 * 60 * 60 * 1000);
+  const cutoff = new Date(now.getTime() + SCAN_DAYS_AHEAD * 24 * 60 * 60 * 1000);
 
   const learnedPatterns = await getLearnedPatterns();
-  const processedEvents = await getProcessedEvents();
+  let processedEvents = await getProcessedEvents();
   const newPendingEvents = [];
   const autoBlocked = [];
 
@@ -198,7 +197,7 @@ module.exports = async (req, res) => {
       if (!event.start) continue;
       const eventStart = new Date(event.start);
       if (isNaN(eventStart.getTime())) continue;
-      if (eventStart <= alaskaNow) continue;
+      if (eventStart <= now) continue;
       if (eventStart > cutoff) continue;
 
       // Skip events under 15 minutes — likely reminders not real events
@@ -233,7 +232,7 @@ module.exports = async (req, res) => {
         confidence: decision.confidence,
         reason: decision.reason,
         needsConfirmation: decision.needsConfirmation,
-        scannedAt: alaskaNow.toISOString()
+        scannedAt: now.toISOString()
       };
 
       if (!decision.needsConfirmation && decision.decision === 'BLOCK') {
@@ -247,12 +246,15 @@ module.exports = async (req, res) => {
     }
   }
 
-  // Save pending events — cap at 50 most recent to avoid KV size issues
+  // Save pending events — cap at 50, keeping the NEWEST entries
   const existingPending = await getPendingEvents();
   const existingIds = existingPending.map(e => e.id);
   const merged = [...existingPending, ...newPendingEvents.filter(e => !existingIds.includes(e.id))];
-  const capped = merged.slice(0, 50);
+  const capped = merged.slice(-50);
   await kvSet('pending_events', capped);
+
+  // Prevent processed_events from growing forever — keep last 500
+  processedEvents = processedEvents.slice(-500);
   await kvSet('processed_events', processedEvents);
 
   return res.status(200).json({
